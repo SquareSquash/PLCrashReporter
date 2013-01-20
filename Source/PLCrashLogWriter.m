@@ -54,6 +54,10 @@
 #import <UIKit/UIKit.h> // For UIDevice
 #endif
 
+#if TARGET_OS_MAC && !TARGET_OS_IPHONE && !TARGET_IPHONE_SIMULATOR
+#import <ExceptionHandling/ExceptionHandling.h>
+#endif
+
 /**
  * @internal
  * Maximum number of frames that will be written to the crash report for a single thread. Used as a safety measure
@@ -441,6 +445,16 @@ void plcrash_log_writer_set_exception (plcrash_log_writer_t *writer, NSException
 
     /* Save the call stack, if available */
     NSArray *callStackArray = [exception callStackReturnAddresses];
+#if TARGET_OS_MAC && !TARGET_OS_IPHONE && !TARGET_IPHONE_SIMULATOR
+    if (!callStackArray) {
+        NSArray *frames = [[[exception userInfo] objectForKey:NSStackTraceKey] componentsSeparatedByCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+        callStackArray = [[NSMutableArray alloc] initWithCapacity:[frames count]];
+        for (NSString *frame in frames) {
+            long address = strtol([frame cStringUsingEncoding:NSASCIIStringEncoding], NULL, 16);
+            [(NSMutableArray *)callStackArray addObject:[NSNumber numberWithLong:address]];
+        }
+    }
+#endif
     if (callStackArray != nil && [callStackArray count] > 0) {
         size_t count = [callStackArray count];
         writer->uncaught_exception.callstack_count = count;

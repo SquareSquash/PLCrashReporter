@@ -65,6 +65,20 @@ typedef struct PLCrashReporterCallbacks {
     PLCrashReporterPostCrashSignalCallback handleSignal;
 } PLCrashReporterCallbacks;
 
+/**
+ * The different ways PLCrashReporter can catch @a NSException instances.
+ */
+typedef enum PLExceptionHandling {
+    /** The crash reporter does not catch any exceptions. */
+    PLExceptionHandlingNone = 0,
+    /** The crash reporter catches uncaught exceptions, system exceptions,
+        runtime exceptions, exceptions caught by the top-level handler, and
+        other exceptions. (Mac OS X only.) */
+    PLExceptionHandlingAll,
+    /** The crash reporter handles uncaught exceptions only. (iOS compatible.) */
+    PLExceptionHandlingUncaughtOnly
+} PLExceptionHandling;
+
 @interface PLCrashReporter : NSObject {
 @private
     /** YES if the crash reporter has been enabled */
@@ -96,8 +110,8 @@ typedef struct PLCrashReporterCallbacks {
 - (BOOL) purgePendingCrashReport;
 - (BOOL) purgePendingCrashReportAndReturnError: (NSError **) outError;
 
-- (BOOL) enableCrashReporter;
-- (BOOL) enableCrashReporterAndReturnError: (NSError **) outError;
+- (BOOL) enableCrashReporterWithExceptionHandling: (PLExceptionHandling)handling;
+- (BOOL) enableCrashReporterWithExceptionHandling: (PLExceptionHandling)handling andReturnError: (NSError **) outError;
 
 - (void) setCrashCallbacks: (PLCrashReporterCallbacks *) callbacks;
 

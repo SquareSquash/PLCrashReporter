@@ -178,7 +178,7 @@ typedef enum {
  *         [self handleCrashReport];
     
  *     // Enable the Crash Reporter
- *     if (![crashReporter enableCrashReporterAndReturnError: &error])
+ *     if (![crashReporter enableCrashReporterWithExceptionHandling:PLExceptionHandlingUncaughtOnly AndReturnError: &error])
  *         NSLog(@"Warning: Could not enable crash reporter: %@", error);
  *         
  * }

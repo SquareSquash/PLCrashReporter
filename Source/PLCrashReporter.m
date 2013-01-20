@@ -36,6 +36,10 @@
 
 #import "PLCrashReporterNSError.h"
 
+#if TARGET_OS_MAC && !TARGET_IPHONE_SIMULATOR && !TARGET_OS_IPHONE
+#import <ExceptionHandling/ExceptionHandling.h>
+#endif
+
 #import <fcntl.h>
 #import <dlfcn.h>
 #import <mach-o/dyld.h>
@@ -295,11 +299,14 @@ static void uncaught_exception_handler (NSException *exception) {
  * Enable the crash reporter. Once called, all application crashes will
  * result in a crash report being written prior to application exit.
  *
+ * @param handling Determines what kinds of @a NSException instances will be
+ * handled by the crash reporter.
+ *
  * @return Returns YES on success, or NO if the crash reporter could
  * not be enabled.
  */
-- (BOOL) enableCrashReporter {
-    return [self enableCrashReporterAndReturnError: nil];
+- (BOOL) enableCrashReporterWithExceptionHandling: (PLExceptionHandling)handling {
+    return [self enableCrashReporterWithExceptionHandling:handling andReturnError:nil];
 }
 
 
@@ -311,6 +318,9 @@ static void uncaught_exception_handler (NSException *exception) {
  * This method must only be invoked once. Further invocations will throw
  * a PLCrashReporterException.
  *
+ * @param handling Determines what kinds of @a NSException instances will be
+ * handled by the crash reporter.
+ *
  * @param outError A pointer to an NSError object variable. If an error occurs, this pointer
  * will contain an error object indicating why the Crash Reporter could not be enabled.
  * If no error occurs, this parameter will be left unmodified. You may specify nil for this
@@ -319,7 +329,7 @@ static void uncaught_exception_handler (NSException *exception) {
  * @return Returns YES on success, or NO if the crash reporter could
  * not be enabled.
  */
-- (BOOL) enableCrashReporterAndReturnError: (NSError **) outError {
+- (BOOL) enableCrashReporterWithExceptionHandling: (PLExceptionHandling)handling andReturnError: (NSError **) outError {
     /* Check for programmer error */
     if (_enabled)
         [NSException raise: PLCrashReporterException format: @"The crash reporter has alread been enabled"];
@@ -339,7 +349,21 @@ static void uncaught_exception_handler (NSException *exception) {
         return NO;
 
     /* Set the uncaught exception handler */
-    NSSetUncaughtExceptionHandler(&uncaught_exception_handler);
+    if (handling == PLExceptionHandlingUncaughtOnly)
+        NSSetUncaughtExceptionHandler(&uncaught_exception_handler);
+    else if (handling == PLExceptionHandlingAll) {
+#if TARGET_OS_MAC && !TARGET_IPHONE_SIMULATOR && !TARGET_OS_IPHONE
+        [[NSExceptionHandler defaultExceptionHandler] setExceptionHandlingMask:
+         [[NSExceptionHandler defaultExceptionHandler] exceptionHandlingMask] |
+         NSHandleUncaughtExceptionMask |
+         NSHandleUncaughtSystemExceptionMask |
+         NSHandleUncaughtRuntimeErrorMask |
+         NSHandleTopLevelExceptionMask | NSHandleOtherExceptionMask];
+        [[NSExceptionHandler defaultExceptionHandler] setDelegate:self];
+#else
+        [NSException raise:PLCrashReporterException format:@"Can't use PLExceptionHandlingAll with iOS builds."];
+#endif
+    }
 
     /* Success */
     _enabled = YES;
@@ -469,8 +493,8 @@ static void uncaught_exception_handler (NSException *exception) {
  *
  * @param callbacks A pointer to an initialized PLCrashReporterCallbacks structure.
  *
- * @note This method must be called prior to PLCrashReporter::enableCrashReporter or
- * PLCrashReporter::enableCrashReporterAndReturnError:
+ * @note This method must be called prior to PLCrashReporter::enableCrashReporterWithExceptionHandling: or
+ * PLCrashReporter::enableCrashReporterWithExceptionHandling:andReturnError:
  *
  * @sa @ref async_safety
  */

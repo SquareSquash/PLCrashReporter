@@ -89,7 +89,7 @@ int main (int argc, char *argv[]) {
     [[PLCrashReporter sharedReporter] setCrashCallbacks: &cb];
 
     /* Enable the crash reporter */
-    if (![[PLCrashReporter sharedReporter] enableCrashReporterAndReturnError: &error]) {
+    if (![[PLCrashReporter sharedReporter] enableCrashReporterWithExceptionHandling:PLExceptionHandlingUncaughtOnly andReturnError: &error]) {
         NSLog(@"Could not enable crash reporter: %@", error);
     }
 
