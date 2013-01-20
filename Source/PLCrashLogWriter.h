@@ -46,6 +46,21 @@
 /**
  * @internal
  *
+ * @a NSException @a userInfo dictionary entry.
+ */
+typedef struct user_info_t {
+    /** Key name. */
+    char *key;
+    /** For @a NSCoding-complaint objects, the output of @ NSKeyedArchiver. For
+        other objects, the result of calling @a description. */
+    char *serialized;
+    /** If true, serialized contains @a NSKeyedArchiver output. */
+    BOOL archive;
+} user_info_t;
+
+/**
+ * @internal
+ *
  * Crash log writer context.
  */
 typedef struct plcrash_log_writer {
@@ -129,6 +144,12 @@ typedef struct plcrash_log_writer {
         
         /** Call stack frame count, or 0 if the call stack is unavailable */
         size_t callstack_count;
+
+        /** Fields for each key/value pair in the @a userInfo dictionary. */
+        user_info_t *user_info;
+
+        /** Number of @a userInfo dictionary pairs. */
+        size_t user_info_size;
     } uncaught_exception;
 } plcrash_log_writer_t;
 

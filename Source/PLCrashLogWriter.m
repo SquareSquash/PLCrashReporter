@@ -170,6 +170,19 @@ enum {
     /** CrashReports.exception.frames */
     PLCRASH_PROTO_EXCEPTION_FRAMES_ID = 3,
 
+    /** CrashReports.exception.user_info */
+    PLCRASH_PROTO_EXCEPTION_USER_INFO_ID = 4,
+
+
+    /** CrashReport.exception.user_info.key */
+    PLCRASH_PROTO_EXCEPTION_USERINFO_KEY_ID = 1,
+
+    /** CrashReport.exception.user_info.serialized */
+    PLCRASH_PROTO_EXCEPTION_USERINFO_SERIALIZED_ID = 2,
+
+    /** CrashReport.exception.user_info.archive */
+    PLCRASH_PROTO_EXCEPTION_USERINFO_ARCHIVE_ID = 3,
+
 
     /** CrashReport.signal */
     PLCRASH_PROTO_SIGNAL_ID = 6,
@@ -468,6 +481,29 @@ void plcrash_log_writer_set_exception (plcrash_log_writer_t *writer, NSException
         }
     }
 
+    writer->uncaught_exception.user_info_size = [[exception userInfo] count];
+    writer->uncaught_exception.user_info = malloc(sizeof(user_info_t) * [[exception userInfo] count]);
+    uint64_t index = 0;
+    for (NSString *key in [exception userInfo]) {
+        id object = [[exception userInfo] objectForKey:key];
+        writer->uncaught_exception.user_info[index].key = strdup([key UTF8String]);
+        if ([object conformsToProtocol:@protocol(NSCoding)]) {
+            NSMutableData *encoded = [[NSMutableData alloc] init];
+            NSKeyedArchiver *archiver = [[NSKeyedArchiver alloc] initForWritingWithMutableData:encoded];
+            [archiver setOutputFormat:NSPropertyListXMLFormat_v1_0];
+            [archiver encodeRootObject:object];
+            [archiver finishEncoding];
+            [archiver release];
+            NSString *string = [[NSString alloc] initWithData:encoded encoding:NSUTF8StringEncoding];
+            [encoded release];
+            writer->uncaught_exception.user_info[index].serialized = strdup([string UTF8String]);
+            [string release];
+        } else
+            writer->uncaught_exception.user_info[index].serialized = strdup([[object description] UTF8String]);
+
+        index++;
+    }
+
     /* Ensure that any signal handler has a consistent view of the above initialization. */
     OSMemoryBarrier();
 }
@@ -522,6 +558,16 @@ void plcrash_log_writer_free (plcrash_log_writer_t *writer) {
         
         if (writer->uncaught_exception.callstack != NULL)
             free(writer->uncaught_exception.callstack);
+
+        if (writer->uncaught_exception.user_info != NULL) {
+            for (uint64_t i=0; i!=writer->uncaught_exception.user_info_size; i++) {
+                if (writer->uncaught_exception.user_info[i].key != NULL)
+                    free(writer->uncaught_exception.user_info[i].key);
+                if (writer->uncaught_exception.user_info[i].serialized != NULL)
+                    free(writer->uncaught_exception.user_info[i].serialized);
+            }
+            free(writer->uncaught_exception.user_info);
+        }
     }
 }
 
@@ -854,6 +900,24 @@ static size_t plcrash_writer_write_thread_frame (plcrash_async_file_t *file, uin
 /**
  * @internal
  *
+ * Write an exception userInfo entry
+ *
+ * @param file Output file
+ * @param userInfo The userInfo dictionary entry.
+ */
+static size_t plcrash_writer_write_user_info_pair (plcrash_async_file_t *file, user_info_t userInfo) {
+    size_t rv = 0;
+
+    rv += plcrash_writer_pack(file, PLCRASH_PROTO_EXCEPTION_USERINFO_KEY_ID, PLPROTOBUF_C_TYPE_STRING, userInfo.key);
+    rv += plcrash_writer_pack(file, PLCRASH_PROTO_EXCEPTION_USERINFO_SERIALIZED_ID, PLPROTOBUF_C_TYPE_STRING, userInfo.serialized);
+    rv += plcrash_writer_pack(file, PLCRASH_PROTO_EXCEPTION_USERINFO_ARCHIVE_ID, PLPROTOBUF_C_TYPE_BOOL, &userInfo.archive);
+
+    return rv;
+}
+
+/**
+ * @internal
+ *
  * Write a thread message
  *
  * @param file Output file
@@ -1030,6 +1094,17 @@ static size_t plcrash_writer_write_exception (plcrash_async_file_t *file, plcras
         rv += plcrash_writer_pack(file, PLCRASH_PROTO_EXCEPTION_FRAMES_ID, PLPROTOBUF_C_TYPE_MESSAGE, &frame_size);
         rv += plcrash_writer_write_thread_frame(file, pc, image_list, findContext);
         frame_count++;
+    }
+
+    /* Write the user info */
+    for (size_t i = 0; i < writer->uncaught_exception.user_info_size; i++) {
+        user_info_t pair = writer->uncaught_exception.user_info[i];
+
+        /* Determine the size */
+        uint32_t pair_size = plcrash_writer_write_user_info_pair(NULL, pair);
+
+        rv += plcrash_writer_pack(file, PLCRASH_PROTO_EXCEPTION_USER_INFO_ID, PLPROTOBUF_C_TYPE_MESSAGE, &pair_size);
+        rv += plcrash_writer_write_user_info_pair(file, pair);
     }
 
     return rv;

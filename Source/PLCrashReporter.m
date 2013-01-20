@@ -361,7 +361,7 @@ static void uncaught_exception_handler (NSException *exception) {
          NSHandleTopLevelExceptionMask | NSHandleOtherExceptionMask];
         [[NSExceptionHandler defaultExceptionHandler] setDelegate:self];
 #else
-        [NSException raise:PLCrashReporterException format:@"Can't use PLExceptionHandlingAll with iOS builds."];
+        [NSException raise:PLCrashReporterException format:@"Can only use PLExceptionHandlingAll with OS X builds."];
 #endif
     }
 
@@ -645,6 +645,14 @@ static void uncaught_exception_handler (NSException *exception) {
     return [[self crashReportDirectory] stringByAppendingPathComponent: PLCRASH_LIVE_CRASHREPORT];
 }
 
+
+/**
+ * Delegate method for NSExceptionHandling.
+ */
+- (BOOL) exceptionHandler: (NSExceptionHandler *) sender shouldHandleException: (NSException *) exception mask: (unsigned int) mask {
+    uncaught_exception_handler(exception);
+    return YES;
+}
 
 
 @end
