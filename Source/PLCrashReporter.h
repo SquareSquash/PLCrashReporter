@@ -96,10 +96,10 @@ typedef enum PLExceptionHandling {
 
 + (PLCrashReporter *) sharedReporter;
 
-- (BOOL) hasPendingCrashReport;
+- (BOOL) hasPendingCrashReports;
 
-- (NSData *) loadPendingCrashReportData;
-- (NSData *) loadPendingCrashReportDataAndReturnError: (NSError **) outError;
+- (void) loadPendingCrashReportData: (void (^)(NSData *data, BOOL *purge)) block;
+- (void) loadPendingCrashReportData: (void (^)(NSData *data, BOOL *purge)) block andReturnError: (NSError **) outError;
 
 - (NSData *) generateLiveReportWithThread: (thread_t) thread;
 - (NSData *) generateLiveReportWithThread: (thread_t) thread error: (NSError **) outError;
@@ -107,8 +107,8 @@ typedef enum PLExceptionHandling {
 - (NSData *) generateLiveReport;
 - (NSData *) generateLiveReportAndReturnError: (NSError **) outError;
 
-- (BOOL) purgePendingCrashReport;
-- (BOOL) purgePendingCrashReportAndReturnError: (NSError **) outError;
+- (BOOL) purgePendingCrashReports;
+- (BOOL) purgePendingCrashReportsAndReturnError: (NSError **) outError;
 
 - (BOOL) enableCrashReporterWithExceptionHandling: (PLExceptionHandling)handling;
 - (BOOL) enableCrashReporterWithExceptionHandling: (PLExceptionHandling)handling andReturnError: (NSError **) outError;

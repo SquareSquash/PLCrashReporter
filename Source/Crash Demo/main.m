@@ -43,7 +43,7 @@ void stackFrame (void) {
 
 /* If a crash report exists, make it accessible via iTunes document sharing. This is a no-op on Mac OS X. */
 static void save_crash_report () {
-    if (![[PLCrashReporter sharedReporter] hasPendingCrashReport]) 
+    if (![[PLCrashReporter sharedReporter] hasPendingCrashReports])
         return;
 
 #if TARGET_OS_IPHONE
@@ -58,18 +58,19 @@ static void save_crash_report () {
     }
 
 
-    NSData *data = [[PLCrashReporter sharedReporter] loadPendingCrashReportDataAndReturnError: &error];
-    if (data == nil) {
-        NSLog(@"Failed to load crash report data: %@", error);
-        return;
-    }
+    [[PLCrashReporter sharedReporter] loadPendingCrashReportData:^(NSData *data, BOOL *purge) {
+        if (data == nil) {
+            NSLog(@"Failed to load crash report data: %@", error);
+            return;
+        }
 
-    NSString *outputPath = [documentsDirectory stringByAppendingPathComponent: @"demo.plcrash"];
-    if (![data writeToFile: outputPath atomically: YES]) {
-        NSLog(@"Failed to write crash report");
-    }
-    
-    NSLog(@"Saved crash report to: %@", outputPath);
+        NSString *outputPath = [documentsDirectory stringByAppendingPathComponent: @"demo.plcrash"];
+        if (![data writeToFile: outputPath atomically: YES]) {
+            NSLog(@"Failed to write crash report");
+        }
+
+        NSLog(@"Saved crash report to: %@", outputPath);
+    } andReturnError: &error];
 #endif
 }
 

@@ -232,36 +232,41 @@ static void uncaught_exception_handler (NSException *exception) {
 
 
 /**
- * Returns YES if the application has previously crashed and
- * an pending crash report is available.
+ * Returns YES if the application has one or more pending crash reports.
  */
-- (BOOL) hasPendingCrashReport {
+- (BOOL) hasPendingCrashReports {
     /* Check for a live crash report file */
-    return [[NSFileManager defaultManager] fileExistsAtPath: [self crashReportPath]];
+    return [[[NSFileManager defaultManager] contentsOfDirectoryAtPath:[self crashReportDirectory] error:nil] count] > 0;
 }
 
 
 /**
- * If an application has a pending crash report, this method returns the crash
- * report data.
+ * If an application has pending crash reports, this method executes the block
+ * on the data for each crash report.
  *
  * You may use this to submit the report to your own HTTP server, over e-mail, or even parse and
  * introspect the report locally using the PLCrashReport API.
+ *
+ * @param block A block to execute on each crash report. If purge is set to YES,
+ * the crash report will be deleted after the block completes.
  *
  * @return Returns nil if the crash report data could not be loaded.
  */
-- (NSData *) loadPendingCrashReportData {
-    return [self loadPendingCrashReportDataAndReturnError: NULL];
+- (void) loadPendingCrashReportData: (void (^)(NSData *data, BOOL *purge)) block {
+    [self loadPendingCrashReportData:block andReturnError: NULL];
 }
 
 
 /**
- * If an application has a pending crash report, this method returns the crash
- * report data.
+ * If an application has pending crash reports, this method executes the block
+ * on the data for each crash report.
  *
  * You may use this to submit the report to your own HTTP server, over e-mail, or even parse and
  * introspect the report locally using the PLCrashReport API.
- 
+ *
+ * @param block A block to execute on each crash report. If purge is set to YES,
+ * the crash report will be deleted after the block completes.
+ *
  * @param outError A pointer to an NSError object variable. If an error occurs, this pointer
  * will contain an error object indicating why the pending crash report could not be
  * loaded. If no error occurs, this parameter will be left unmodified. You may specify
@@ -269,9 +274,42 @@ static void uncaught_exception_handler (NSException *exception) {
  *
  * @return Returns nil if the crash report data could not be loaded.
  */
-- (NSData *) loadPendingCrashReportDataAndReturnError: (NSError **) outError {
+- (void) loadPendingCrashReportData: (void (^)(NSData *data, BOOL *purge)) block andReturnError: (NSError **) outError {
+    NSError *error = nil;
+    NSArray *files = [[NSFileManager defaultManager] contentsOfDirectoryAtPath:[self crashReportDirectory] error:&error];
+    if (error) {
+        *outError = error;
+        return;
+    }
+
     /* Load the (memory mapped) data */
-    return [NSData dataWithContentsOfFile: [self crashReportPath] options: NSMappedRead error: outError];
+    [files enumerateObjectsUsingBlock:^(NSString *filename, NSUInteger index, BOOL *stop) {
+        NSString *file = [[self crashReportDirectory] stringByAppendingPathComponent:filename];
+        NSError *err = nil;
+        NSData *contents = [[NSData alloc] initWithContentsOfFile:file options:0 error:&err];
+        if (err) {
+            *stop = YES;
+            *outError = error;
+        } else {
+            BOOL purge = NO;
+            block(contents, &purge);
+            if (purge) [[NSFileManager defaultManager] removeItemAtPath:file error:&err];
+            if (err) {
+                *stop = YES;
+                *outError = error;
+            }
+        }
+    }];
+}
+
+
+/**
+ * Purge all pending crash reports.
+ *
+ * @return Returns YES on success, or NO on error.
+ */
+- (BOOL) purgePendingCrashReports {
+    return [self purgePendingCrashReportsAndReturnError: NULL];
 }
 
 
@@ -280,18 +318,27 @@ static void uncaught_exception_handler (NSException *exception) {
  *
  * @return Returns YES on success, or NO on error.
  */
-- (BOOL) purgePendingCrashReport {
-    return [self purgePendingCrashReportAndReturnError: NULL];
-}
+- (BOOL) purgePendingCrashReportsAndReturnError: (NSError **) outError {
+    NSError *error = nil;
+    NSArray *reports = [[NSFileManager defaultManager] contentsOfDirectoryAtPath:[self crashReportDirectory] error:&error];
+    if (error) {
+        *outError = error;
+        return NO;
+    }
 
+    __block BOOL wasError = NO;
+    [reports enumerateObjectsUsingBlock:^(NSString *filename, NSUInteger index, BOOL *stop) {
+        NSString *file = [[self crashReportDirectory] stringByAppendingPathComponent:filename];
+        NSError *err = nil;
+        [[NSFileManager defaultManager] removeItemAtPath:file error:&err];
+        if (err) {
+            *outError = err;
+            *stop = YES;
+            wasError = YES;
+        }
+    }];
 
-/**
- * Purge a pending crash report.
- *
- * @return Returns YES on success, or NO on error.
- */
-- (BOOL) purgePendingCrashReportAndReturnError: (NSError **) outError {
-    return [[NSFileManager defaultManager] removeItemAtPath: [self crashReportPath] error: outError];
+    return wasError;
 }
 
 
