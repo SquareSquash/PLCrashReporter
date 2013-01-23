@@ -118,19 +118,18 @@ static void populate_nserror (NSError **error, PLCrashReporterError code, NSStri
     }
 
     /* Signal info */
-    _signalInfo = [[self extractSignalInfo: _decoder->crashReport->signal error: outError] retain];
-    if (!_signalInfo)
-        goto error;
+    _signalInfo = [self extractSignalInfo: _decoder->crashReport->signal error: outError];
+    if (_signalInfo) [_signalInfo retain];
+//    if (!_signalInfo)
+//        goto error;
 
     /* Thread info */
     _threads = [[self extractThreadInfo: _decoder->crashReport error: outError] retain];
-    if (!_threads)
-        goto error;
+    if (!_threads) _threads = [[NSArray alloc] init];
 
     /* Image info */
     _images = [[self extractImageInfo: _decoder->crashReport error: outError] retain];
-    if (!_images)
-        goto error;
+    if (!_images) _images = [[NSArray alloc] init];
 
     /* Exception info, if it is available */
     if (_decoder->crashReport->exception != NULL) {
@@ -152,7 +151,7 @@ error:
     [_machineInfo release];
     [_applicationInfo release];
     [_processInfo release];
-    [_signalInfo release];
+    if (_signalInfo) [_signalInfo release];
     [_threads release];
     [_images release];
     [_exceptionInfo release];
@@ -445,9 +444,9 @@ error:
  */
 - (PLCrashReportSymbolInfo *) extractSymbolInfo: (Plcrash__CrashReport__Symbol *) symbol error: (NSError **) outError {
     if (symbol == NULL) {
-        populate_nserror(outError, PLCrashReporterErrorCrashReportInvalid,
-                         NSLocalizedString(@"Crash report is missing symbol information",
-                                           @"Missing symbol info in crash report"));
+//        populate_nserror(outError, PLCrashReporterErrorCrashReportInvalid,
+//                         NSLocalizedString(@"Crash report is missing symbol information",
+//                                           @"Missing symbol info in crash report"));
         return nil;
     }
     
@@ -464,9 +463,9 @@ error:
 - (PLCrashReportStackFrameInfo *) extractStackFrameInfo: (Plcrash__CrashReport__Thread__StackFrame *) stackFrame error: (NSError **) outError {
     /* There should be at least one thread */
     if (stackFrame == NULL) {
-        populate_nserror(outError, PLCrashReporterErrorCrashReportInvalid,
-                         NSLocalizedString(@"Crash report is missing stack frame information",
-                                           @"Missing stack frame info in crash report"));
+//        populate_nserror(outError, PLCrashReporterErrorCrashReportInvalid,
+//                         NSLocalizedString(@"Crash report is missing stack frame information",
+//                                           @"Missing stack frame info in crash report"));
         return nil;
     }
     
@@ -487,9 +486,9 @@ error:
 - (NSArray *) extractThreadInfo: (Plcrash__CrashReport *) crashReport error: (NSError **) outError {
     /* There should be at least one thread */
     if (crashReport->n_threads == 0) {
-        populate_nserror(outError, PLCrashReporterErrorCrashReportInvalid,
-                         NSLocalizedString(@"Crash report is missing thread state information",
-                                           @"Missing thread info in crash report"));
+//        populate_nserror(outError, PLCrashReporterErrorCrashReportInvalid,
+//                         NSLocalizedString(@"Crash report is missing thread state information",
+//                                           @"Missing thread info in crash report"));
         return nil;
     }
 
@@ -544,9 +543,9 @@ error:
 - (NSArray *) extractImageInfo: (Plcrash__CrashReport *) crashReport error: (NSError **) outError {
     /* There should be at least one image */
     if (crashReport->n_binary_images == 0) {
-        populate_nserror(outError, PLCrashReporterErrorCrashReportInvalid,
-                         NSLocalizedString(@"Crash report is missing binary image information",
-                                           @"Missing image info in crash report"));
+//        populate_nserror(outError, PLCrashReporterErrorCrashReportInvalid,
+//                         NSLocalizedString(@"Crash report is missing binary image information",
+//                                           @"Missing image info in crash report"));
         return nil;
     }
 
@@ -656,25 +655,25 @@ error:
 {
     /* Validate */
     if (signalInfo == NULL) {
-        populate_nserror(outError, PLCrashReporterErrorCrashReportInvalid, 
-                         NSLocalizedString(@"Crash report is missing Signal Information section", 
-                                           @"Missing appinfo in crash report"));
+//        populate_nserror(outError, PLCrashReporterErrorCrashReportInvalid, 
+//                         NSLocalizedString(@"Crash report is missing Signal Information section", 
+//                                           @"Missing appinfo in crash report"));
         return nil;
     }
     
     /* Name available? */
     if (signalInfo->name == NULL) {
-        populate_nserror(outError, PLCrashReporterErrorCrashReportInvalid, 
-                         NSLocalizedString(@"Crash report is missing signal name field", 
-                                           @"Missing appinfo operating system in crash report"));
+//        populate_nserror(outError, PLCrashReporterErrorCrashReportInvalid, 
+//                         NSLocalizedString(@"Crash report is missing signal name field", 
+//                                           @"Missing appinfo operating system in crash report"));
         return nil;
     }
     
     /* Code available? */
     if (signalInfo->code == NULL) {
-        populate_nserror(outError, PLCrashReporterErrorCrashReportInvalid, 
-                         NSLocalizedString(@"Crash report is missing signal code field", 
-                                           @"Missing appinfo operating system in crash report"));
+//        populate_nserror(outError, PLCrashReporterErrorCrashReportInvalid, 
+//                         NSLocalizedString(@"Crash report is missing signal code field", 
+//                                           @"Missing appinfo operating system in crash report"));
         return nil;
     }
     

@@ -1193,22 +1193,24 @@ plcrash_error_t plcrash_log_writer_write (plcrash_log_writer_t *writer,
 
     /* A context must be supplied if the current thread is marked as the crashed thread; otherwise,
      * the thread's stack can not be safely walked. */
-    PLCF_ASSERT(mach_thread_self() != crashed_thread || current_context != NULL);
+    BOOL include_stack = (mach_thread_self() != crashed_thread || current_context != NULL);
 
-    /* Get a list of all threads */
-    if (task_threads(mach_task_self(), &threads, &thread_count) != KERN_SUCCESS) {
-        PLCF_DEBUG("Fetching thread list failed");
-        thread_count = 0;
-    }
-    
-    /* Suspend all but the current thread. */
-    for (mach_msg_type_number_t i = 0; i < thread_count; i++) {
-        if (threads[i] != mach_thread_self())
-            thread_suspend(threads[i]);
+    plcrash_async_symbol_cache_t findContext;
+    if (include_stack) {
+        /* Get a list of all threads */
+        if (task_threads(mach_task_self(), &threads, &thread_count) != KERN_SUCCESS) {
+            PLCF_DEBUG("Fetching thread list failed");
+            thread_count = 0;
+        }
+
+        /* Suspend all but the current thread. */
+        for (mach_msg_type_number_t i = 0; i < thread_count; i++) {
+            if (threads[i] != mach_thread_self())
+                thread_suspend(threads[i]);
+        }
     }
 
     /* Set up a symbol-finding context. */
-    plcrash_async_symbol_cache_t findContext;
     plcrash_error_t err = plcrash_async_symbol_cache_init(&findContext);
     /* Abort if it failed, although that should never actually happen, ever. */
     if (err != PLCRASH_ESUCCESS)
@@ -1294,53 +1296,55 @@ plcrash_error_t plcrash_log_writer_write (plcrash_log_writer_t *writer,
                                           writer->process_info.process_path, writer->process_info.parent_process_name, 
                                           writer->process_info.parent_process_id, writer->process_info.native);
     }
-    
-    /* Threads */
-    uint32_t thread_number = 0;
-    for (mach_msg_type_number_t i = 0; i < thread_count; i++) {
-        thread_t thread = threads[i];
-        ucontext_t *thr_ctx = NULL;
-        bool crashed = false;
-        uint32_t size;
 
-        /* If executing on the target thread, we need to a valid context to walk */
-        if (mach_thread_self() == thread) {
-            /* Can't log a report for the current thread without a valid context. */
-            if (current_context == NULL)
-                continue;
-        
-            thr_ctx = current_context;
+    if (include_stack) {
+        /* Threads */
+        uint32_t thread_number = 0;
+        for (mach_msg_type_number_t i = 0; i < thread_count; i++) {
+            thread_t thread = threads[i];
+            ucontext_t *thr_ctx = NULL;
+            bool crashed = false;
+            uint32_t size;
+
+            /* If executing on the target thread, we need to a valid context to walk */
+            if (mach_thread_self() == thread) {
+                /* Can't log a report for the current thread without a valid context. */
+                if (current_context == NULL)
+                    continue;
+
+                thr_ctx = current_context;
+            }
+
+            /* Check if this is the crashed thread */
+            if (crashed_thread == thread) {
+                crashed = true;
+            }
+
+            /* Determine the size */
+            size = plcrash_writer_write_thread(NULL, thread, thread_number, thr_ctx, image_list, &findContext, crashed);
+
+            /* Write message */
+            plcrash_writer_pack(file, PLCRASH_PROTO_THREADS_ID, PLPROTOBUF_C_TYPE_MESSAGE, &size);
+            plcrash_writer_write_thread(file, thread, thread_number, thr_ctx, image_list, &findContext, crashed);
+
+            thread_number++;
         }
-        
-        /* Check if this is the crashed thread */
-        if (crashed_thread == thread) {
-            crashed = true;
+
+        /* Binary Images */
+        plcrash_async_image_list_set_reading(image_list, true);
+
+        plcrash_async_image_t *image = NULL;
+        while ((image = plcrash_async_image_list_next(image_list, image)) != NULL) {
+            uint32_t size;
+
+            /* Calculate the message size */
+            size = plcrash_writer_write_binary_image(NULL, &image->macho_image);
+            plcrash_writer_pack(file, PLCRASH_PROTO_BINARY_IMAGES_ID, PLPROTOBUF_C_TYPE_MESSAGE, &size);
+            plcrash_writer_write_binary_image(file, &image->macho_image);
         }
 
-        /* Determine the size */
-        size = plcrash_writer_write_thread(NULL, thread, thread_number, thr_ctx, image_list, &findContext, crashed);
-
-        /* Write message */
-        plcrash_writer_pack(file, PLCRASH_PROTO_THREADS_ID, PLPROTOBUF_C_TYPE_MESSAGE, &size);
-        plcrash_writer_write_thread(file, thread, thread_number, thr_ctx, image_list, &findContext, crashed);
-
-        thread_number++;
+        plcrash_async_image_list_set_reading(image_list, false);
     }
-
-    /* Binary Images */
-    plcrash_async_image_list_set_reading(image_list, true);
-
-    plcrash_async_image_t *image = NULL;
-    while ((image = plcrash_async_image_list_next(image_list, image)) != NULL) {
-        uint32_t size;
-
-        /* Calculate the message size */
-        size = plcrash_writer_write_binary_image(NULL, &image->macho_image);
-        plcrash_writer_pack(file, PLCRASH_PROTO_BINARY_IMAGES_ID, PLPROTOBUF_C_TYPE_MESSAGE, &size);
-        plcrash_writer_write_binary_image(file, &image->macho_image);
-    }
-
-    plcrash_async_image_list_set_reading(image_list, false);
 
     /* Exception */
     if (writer->uncaught_exception.has_exception) {
@@ -1351,9 +1355,9 @@ plcrash_error_t plcrash_log_writer_write (plcrash_log_writer_t *writer,
         plcrash_writer_pack(file, PLCRASH_PROTO_EXCEPTION_ID, PLPROTOBUF_C_TYPE_MESSAGE, &size);
         plcrash_writer_write_exception(file, writer, image_list, &findContext);
     }
-    
+
     /* Signal */
-    {
+    if (siginfo) {
         uint32_t size;
         
         /* Calculate the message size */
@@ -1361,18 +1365,20 @@ plcrash_error_t plcrash_log_writer_write (plcrash_log_writer_t *writer,
         plcrash_writer_pack(file, PLCRASH_PROTO_SIGNAL_ID, PLPROTOBUF_C_TYPE_MESSAGE, &size);
         plcrash_writer_write_signal(file, siginfo);
     }
-    
-    plcrash_async_symbol_cache_free(&findContext);
-    
-    /* Clean up the thread array */
-    for (mach_msg_type_number_t i = 0; i < thread_count; i++) {
-        if (threads[i] != mach_thread_self())
-            thread_resume(threads[i]);
 
-        mach_port_deallocate(mach_task_self(), threads[i]);
+    if (include_stack) {
+        plcrash_async_symbol_cache_free(&findContext);
+
+        /* Clean up the thread array */
+        for (mach_msg_type_number_t i = 0; i < thread_count; i++) {
+            if (threads[i] != mach_thread_self())
+                thread_resume(threads[i]);
+
+            mach_port_deallocate(mach_task_self(), threads[i]);
+        }
+
+        vm_deallocate(mach_task_self(), (vm_address_t)threads, sizeof(thread_t) * thread_count);
     }
-
-    vm_deallocate(mach_task_self(), (vm_address_t)threads, sizeof(thread_t) * thread_count);
     
     return PLCRASH_ESUCCESS;
 }

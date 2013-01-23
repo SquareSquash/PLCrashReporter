@@ -646,13 +646,47 @@ static void uncaught_exception_handler (NSException *exception) {
 }
 
 
+#if TARGET_OS_MAC && !TARGET_OS_IPHONE && !TARGET_IPHONE_SIMULATOR
 /**
  * Delegate method for NSExceptionHandling.
  */
 - (BOOL) exceptionHandler: (NSExceptionHandler *) sender shouldHandleException: (NSException *) exception mask: (unsigned int) mask {
-    uncaught_exception_handler(exception);
+    plcrashreporter_handler_ctx_t context;
+
+    CFUUIDRef UUIDObject = CFUUIDCreate(kCFAllocatorDefault);
+    NSString *UUID = (NSString *)CFUUIDCreateString(kCFAllocatorDefault, UUIDObject);
+    CFRelease(UUIDObject);
+    NSString *filename = [[NSString alloc] initWithFormat:@"%@.plcrash", UUID];
+    [UUID release];
+    context.path = strdup([[[self crashReportDirectory] stringByAppendingPathComponent: filename] UTF8String]);
+    [filename release];
+
+    plcrash_log_writer_init(&context.writer, _applicationIdentifier, _applicationVersion, false);
+    plcrash_log_writer_set_exception(&context.writer, exception);
+
+    plcrash_async_file_t file;
+
+    /* Open the output file */
+    int fd = open(context.path, O_RDWR|O_CREAT|O_TRUNC, 0644);
+    if (fd < 0) {
+        PLCF_DEBUG("Could not open the crashlog output file: %s", strerror(errno));
+        return YES;
+    }
+
+    /* Initialize the output context */
+    plcrash_async_file_init(&file, fd, MAX_REPORT_BYTES);
+
+    /* Write the crash log using the already-initialized writer */
+    plcrash_log_writer_write(&context.writer, mach_thread_self(), &shared_image_list, &file, nil, nil);
+    plcrash_log_writer_close(&context.writer);
+
+    /* Finished */
+    plcrash_async_file_flush(&file);
+    plcrash_async_file_close(&file);
+
     return YES;
 }
+#endif
 
 
 @end
