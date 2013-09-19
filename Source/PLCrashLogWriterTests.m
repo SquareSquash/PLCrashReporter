@@ -42,6 +42,9 @@
 #import <mach-o/dyld.h>
 
 #import "crash_report.pb-c.h"
+#import "PLCrashTestThread.h"
+
+#import "PLCrashSysctl.h"
 
 @interface PLCrashLogWriterTests : SenTestCase {
 @private
@@ -49,7 +52,7 @@
     NSString *_logPath;
     
     /* Test thread */
-    plframe_test_thead_t _thr_args;
+    plcrash_test_thread_t _thr_args;
 }
 
 @end
@@ -62,18 +65,20 @@
     _logPath = [[NSTemporaryDirectory() stringByAppendingString: [[NSProcessInfo processInfo] globallyUniqueString]] retain];
     
     /* Create the test thread */
-    plframe_test_thread_spawn(&_thr_args);
+    plcrash_test_thread_spawn(&_thr_args);
 }
 
 - (void) tearDown {
     NSError *error;
     
     /* Delete the file */
-    STAssertTrue([[NSFileManager defaultManager] removeItemAtPath: _logPath error: &error], @"Could not remove log file");
+    if ([[NSFileManager defaultManager] fileExistsAtPath: _logPath]) {
+        STAssertTrue([[NSFileManager defaultManager] removeItemAtPath: _logPath error: &error], @"Could not remove log file");
+    }
     [_logPath release];
 
     /* Stop the test thread */
-    plframe_test_thread_stop(&_thr_args);
+    plcrash_test_thread_stop(&_thr_args);
 }
 
 // check a crash report's system info
@@ -107,6 +112,68 @@
     STAssertTrue(strcmp(appInfo->version, "1.0") == 0, @"Incorrect app version written");
 }
 
+// check a crash report's process info
+- (void) checkProcessInfo: (Plcrash__CrashReport *) crashReport {
+    Plcrash__CrashReport__ProcessInfo *procInfo = crashReport->process_info;
+    
+    STAssertNotNULL(procInfo, @"No process info available");
+    // Nothing else to do?
+    if (procInfo == NULL)
+        return;
+
+    STAssertEquals((pid_t)procInfo->process_id, getpid(), @"Incorrect process id written");
+    STAssertEquals((pid_t)procInfo->parent_process_id, getppid(), @"Incorrect parent process id written");
+    
+    STAssertTrue(procInfo->has_start_time, @"Missing start time value");
+    STAssertTrue(time(NULL) >= procInfo->start_time, @"Recorded time occured in the future");
+    STAssertTrue(time(NULL) - procInfo->start_time <= 60, @"Recorded time differs from the current time by more than 1 minute");
+
+    int retval;
+    if (plcrash_sysctl_int("sysctl.proc_native", &retval)) {
+        if (retval == 0) {
+            STAssertTrue(procInfo->native, @"Our current process is marked as non-native");
+        } else {
+            STAssertTrue(procInfo->native, @"Our current process is marked as native");
+        }
+    } else {
+        /* If the sysctl is not available, the process can be assumed to be native. */
+        STAssertTrue(procInfo->native, @"No proc_native sysctl specified; native should be assumed");
+    }
+
+    /* Fetch and verify process data via sysctl */
+    struct kinfo_proc process_info;
+    size_t process_info_len = sizeof(process_info);
+    int process_info_mib[4] = { CTL_KERN, KERN_PROC, KERN_PROC_PID, 0 };
+    int process_info_mib_len = 4;
+    
+    /* Current process name name */
+    process_info_mib[3] = getpid();
+    if (sysctl(process_info_mib, process_info_mib_len, &process_info, &process_info_len, NULL, 0) == 0) {
+        STAssertEqualCStrings(procInfo->process_name, process_info.kp_proc.p_comm, @"Incorrect process name");
+    } else {
+        STFail(@"Could not retreive process name: %s", strerror(errno));
+    }
+    
+    /* Current process path */
+    char *process_path = NULL;
+    uint32_t process_path_len = 0;
+    
+    _NSGetExecutablePath(NULL, &process_path_len);
+    if (process_path_len > 0) {
+        process_path = malloc(process_path_len);
+        _NSGetExecutablePath(process_path, &process_path_len);
+        STAssertEqualCStrings(procInfo->process_path, process_path, @"Incorrect process name");
+        free(process_path);
+    }
+    
+    /* Parent process */
+    process_info_mib[3] = getppid();
+    if (sysctl(process_info_mib, process_info_mib_len, &process_info, &process_info_len, NULL, 0) == 0) {
+        STAssertEqualCStrings(procInfo->parent_process_name, process_info.kp_proc.p_comm, @"Incorrect process name");
+    } else {
+        STFail(@"Could not retreive parent process name: %s", strerror(errno));
+    }
+}
 
 - (void) checkThreads: (Plcrash__CrashReport *) crashReport {
     Plcrash__CrashReport__Thread **threads = crashReport->threads;
@@ -213,26 +280,41 @@
 
 
 - (void) testWriteReport {
-    siginfo_t info;
     plframe_cursor_t cursor;
     plcrash_log_writer_t writer;
     plcrash_async_file_t file;
     plcrash_async_image_list_t image_list;
+    plcrash_async_thread_state_t thread_state;
     thread_t thread;
 
+    /* Initialize the image list */
+    plcrash_nasync_image_list_init(&image_list, mach_task_self());
+    for (uint32_t i = 0; i < _dyld_image_count(); i++)
+        plcrash_nasync_image_list_append(&image_list, _dyld_get_image_header(i), _dyld_get_image_name(i));
+
     /* Initialze faux crash data */
+    plcrash_log_signal_info_t info;
+    plcrash_log_bsd_signal_info_t bsd_info;
+    plcrash_log_mach_signal_info_t mach_info;
+    mach_exception_data_type_t mach_codes[2];
     {
-        info.si_addr = (void *) 0x42;
-        info.si_errno = 0;
-        info.si_pid = getpid();
-        info.si_uid = getuid();
-        info.si_code = SEGV_MAPERR;
-        info.si_signo = SIGSEGV;
-        info.si_status = 0;
+        bsd_info.address = (void *) 0x42;
+        bsd_info.code = SEGV_MAPERR;
+        bsd_info.signo = SIGSEGV;
+        
+        mach_info.type = EXC_BAD_ACCESS;
+        mach_info.code = mach_codes;
+        mach_info.code_count = sizeof(mach_codes) / sizeof(mach_codes[0]);
+        mach_codes[0] = KERN_PROTECTION_FAILURE;
+        mach_codes[1] = 0x42;
+    
+        info.mach_info = &mach_info;
+        info.bsd_info = &bsd_info;
         
         /* Steal the test thread's stack for iteration */
         thread = pthread_mach_thread_np(_thr_args.thread);
-        plframe_cursor_thread_init(&cursor, thread);
+        plframe_cursor_thread_init(&cursor, mach_task_self(), thread, &image_list);
+        plcrash_async_thread_state_mach_thread_init(&thread_state, thread);
     }
 
     /* Open the output file */
@@ -240,10 +322,7 @@
     plcrash_async_file_init(&file, fd, 0);
 
     /* Initialize a writer */
-    STAssertEquals(PLCRASH_ESUCCESS, plcrash_log_writer_init(&writer, @"test.id", @"1.0", false), @"Initialization failed");
-    
-    /* Initialize the image list */
-    plcrash_nasync_image_list_init(&image_list, mach_task_self());
+    STAssertEquals(PLCRASH_ESUCCESS, plcrash_log_writer_init(&writer, @"test.id", @"1.0", PLCRASH_ASYNC_SYMBOL_STRATEGY_ALL, false), @"Initialization failed");
 
     /* Set an exception with a valid return address call stack. */
     NSException *e;
@@ -256,7 +335,7 @@
     plcrash_log_writer_set_exception(&writer, e);
 
     /* Write the crash report */
-    STAssertEquals(PLCRASH_ESUCCESS, plcrash_log_writer_write(&writer, thread, &image_list, &file, &info, cursor.uap), @"Crash log failed");
+    STAssertEquals(PLCRASH_ESUCCESS, plcrash_log_writer_write(&writer, thread, &image_list, &file, &info, &thread_state), @"Crash log failed");
 
     /* Close it */
     plcrash_log_writer_close(&writer);
@@ -274,9 +353,21 @@
         return;
 
     STAssertFalse(crashReport->report_info->user_requested, @"Report not correctly marked as non-user-requested");
+    STAssertTrue(crashReport->report_info->has_uuid, @"Report missing a UUID value");
+    STAssertEquals((size_t)16, crashReport->report_info->uuid.len, @"UUID is not expected 16 bytes");
+    {
+        CFUUIDBytes uuid_bytes;
+        memcpy(&uuid_bytes, crashReport->report_info->uuid.data, sizeof(uuid_bytes));
+        CFUUIDRef uuid = CFUUIDCreateFromUUIDBytes(NULL, uuid_bytes);
+        STAssertNotNULL(uuid, @"Value not parsable as a UUID");
+        if (uuid != NULL)
+            CFRelease(uuid);
+    }
 
     /* Test the report */
     [self checkSystemInfo: crashReport];
+    [self checkAppInfo: crashReport];
+    [self checkProcessInfo: crashReport];
     [self checkThreads: crashReport];
     [self checkException: crashReport];
     
@@ -284,16 +375,23 @@
     STAssertTrue(strcmp(crashReport->signal->name, "SIGSEGV") == 0, @"Signal incorrect");
     STAssertTrue(strcmp(crashReport->signal->code, "SEGV_MAPERR") == 0, @"Signal code incorrect");
     STAssertEquals((uint64_t) 0x42, crashReport->signal->address, @"Signal address incorrect");
+    
+    /* Check the mach exception info */
+    STAssertNotNULL(crashReport->signal->mach_exception, @"Missing mach exceptiond info");
+    STAssertEquals(crashReport->signal->mach_exception->type, (uint64_t)EXC_BAD_ACCESS, @"Exception type incorrect");
+    STAssertEquals((size_t)2, crashReport->signal->mach_exception->n_codes, @"Code count incorrect");
+    STAssertEquals((uint64_t) KERN_PROTECTION_FAILURE, crashReport->signal->mach_exception->codes[0], @"code[0] incorrect");
+    STAssertEquals((uint64_t) 0x42, crashReport->signal->mach_exception->codes[1], @"code[1] incorrect");
 
 
     /* Validate the 'crashed' flag is on a thread with the expected PC. */
     uint64_t expectedPC;
 #if __x86_64__
-    expectedPC = cursor.uap->uc_mcontext->__ss.__rip;
+    expectedPC = cursor.frame.thread_state.x86_state.thread.uts.ts64.__rip;
 #elif __i386__
-    expectedPC = cursor.uap->uc_mcontext->__ss.__eip;
+    expectedPC = cursor.frame.thread_state.x86_state.thread.uts.ts32.__eip;
 #elif __arm__
-    expectedPC = cursor.uap->uc_mcontext->__ss.__pc;
+    expectedPC = cursor.frame.thread_state.arm_state.thread.__pc;
 #else
 #error Unsupported Platform
 #endif
@@ -316,147 +414,9 @@
    
     STAssertTrue(foundCrashed, @"No thread marked as crashed");
  
-    /* Free it */
+    /* Clean up */
+    plframe_cursor_free(&cursor);
     protobuf_c_message_free_unpacked((ProtobufCMessage *) crashReport, &protobuf_c_system_allocator);
 }
-
-static uintptr_t getPC () {
-    return (uintptr_t) __builtin_return_address(0);
-}
-
-/**
- * Test writing a 'live' report for the current thread.
- */
-- (void) testWriteCurrentThreadReport {
-    siginfo_t info;
-    plcrash_log_writer_t writer;
-    plcrash_async_file_t file;
-    plcrash_async_image_list_t image_list;
-    
-    /* Initialze faux crash data */
-    {
-        info.si_addr = (void *) 0x42;
-        info.si_errno = 0;
-        info.si_pid = getpid();
-        info.si_uid = getuid();
-        info.si_code = SEGV_MAPERR;
-        info.si_signo = SIGSEGV;
-        info.si_status = 0;
-    }
-    
-    /* Open the output file */
-    int fd = open([_logPath UTF8String], O_RDWR|O_CREAT|O_EXCL, 0644);
-    plcrash_async_file_init(&file, fd, 0);
-    
-    /* Initialize a writer */
-    STAssertEquals(PLCRASH_ESUCCESS, plcrash_log_writer_init(&writer, @"test.id", @"1.0", true), @"Initialization failed");
-    
-    /* Provide binary image info */
-    plcrash_nasync_image_list_init(&image_list, mach_task_self());
-    uint32_t image_count = _dyld_image_count();
-    for (uint32_t i = 0; i < image_count; i++) {
-        plcrash_nasync_image_list_append(&image_list, (pl_vm_address_t) _dyld_get_image_header(i), _dyld_get_image_vmaddr_slide(i), _dyld_get_image_name(i));
-    }
-
-    
-    /* Write the crash report */
-    plcrash_error_t ret = plcrash_log_writer_write_curthread(&writer, &image_list, &file, &info);
-    uintptr_t expectedPC = getPC();
-
-    STAssertEquals(PLCRASH_ESUCCESS, ret, @"Crash log failed");
-    
-    /* Close it */
-    plcrash_log_writer_close(&writer);
-    plcrash_log_writer_free(&writer);
-    plcrash_nasync_image_list_free(&image_list);
-    
-    /* Flush the output */
-    plcrash_async_file_flush(&file);
-    plcrash_async_file_close(&file);
-    
-    
-    /* Try to read the crash report */
-    NSError *error;
-    PLCrashReport *report = [[[PLCrashReport alloc] initWithData: [NSData dataWithContentsOfMappedFile: _logPath] error: &error] autorelease];
-    STAssertNotNil(report, @"Failed to read crash report '%@': %@", _logPath, error);
-    
-    /* Load and validate the written report */
-    Plcrash__CrashReport *crashReport = [self loadReport];
-    
-    /* Test the report */
-    STAssertTrue(crashReport->report_info->user_requested, @"Report not correctly marked as user-requested");
-    [self checkSystemInfo: crashReport];
-    [self checkThreads: crashReport];
-
-    /* Check the signal info */
-    STAssertTrue(strcmp(crashReport->signal->name, "SIGSEGV") == 0, @"Signal incorrect");
-    STAssertTrue(strcmp(crashReport->signal->code, "SEGV_MAPERR") == 0, @"Signal code incorrect");
-    STAssertEquals((uint64_t) 0x42, crashReport->signal->address, @"Signal address incorrect");
-    
-    /* Validate register state. We use the more convenient ObjC API for this. */
-    BOOL foundCrashed = NO;
-    for (int i = 0; i < crashReport->n_threads; i++) {
-        Plcrash__CrashReport__Thread *thread = crashReport->threads[i];        
-        if (!thread->crashed)
-            continue;
-        
-        foundCrashed = YES;
-
-        /* Load the first frame */
-        STAssertNotEquals((size_t)0, thread->n_frames, @"No frames available in backtrace");
-        Plcrash__CrashReport__Thread__StackFrame *f = thread->frames[0];
-
-        /* Validate PC. This check is inexact, as otherwise we would need to carefully instrument the 
-         * call to plcrash_log_writer_write_curthread() in order to determine the exact PC value. */
-        STAssertTrue(expectedPC - f->pc <= 20, @"PC value not within reasonable range");
-
-        /* Extract the registers */
-        NSMutableDictionary *regs = [NSMutableDictionary new];
-        for (int j = 0; j < thread->n_registers; j++) {
-            Plcrash__CrashReport__Thread__RegisterValue *rv = thread->registers[j];
-            [regs setObject: [NSNumber numberWithUnsignedLongLong: rv->value] forKey: [NSString stringWithUTF8String: rv->name]];
-        }
-        
-        uintptr_t (^GetReg)(NSString *name) = ^(NSString *name) {
-            NSNumber *num = [regs objectForKey: name];
-            STAssertNotNil(num, @"Missing requested register %@", name);
-            return (uintptr_t) [num unsignedLongLongValue];
-        };
-
-        /* Architecture specific validations */
-        uint8_t *stackaddr = pthread_get_stackaddr_np(pthread_self());
-        size_t stacksize = pthread_get_stacksize_np(pthread_self());
-
-#if __x86_64__
-        /* Verify that RSP is sane. */
-        uintptr_t rsp = GetReg(@"rsp");
-        STAssertTrue((uint8_t *)rsp < stackaddr && (uint8_t *) rsp >= stackaddr-stacksize, @"RSP outside of stack range");
-
-#elif __i386__
-        /* Verify that ESP is sane. */
-        uintptr_t esp = GetReg(@"esp");
-        STAssertTrue((uint8_t *)esp < stackaddr && (uint8_t *)esp >= stackaddr-stacksize, @"ESP outside of stack range");
-        
-#elif __arm__
-        // TODO 
-        /* Validate LR */
-        void *retaddr = __builtin_return_address(0);
-        uintptr_t lr = GetReg(@"lr");
-        STAssertEquals(retaddr, (void *)lr, @"Incorrect lr: %p", (void *) lr);
-
-        /* Verify that SP is sane. */
-        uintptr_t r7 = GetReg(@"r7");
-        STAssertTrue((uint8_t *)r7 < stackaddr && (uint8_t *)r7 >= stackaddr-stacksize, @"SP outside of stack range");
-#else
-#error Unsupported Platform
-#endif
-    }
-    
-    STAssertTrue(foundCrashed, @"No thread marked as crashed");
-    
-    /* Free it */
-    protobuf_c_message_free_unpacked((ProtobufCMessage *) crashReport, &protobuf_c_system_allocator);
-}
-
 
 @end

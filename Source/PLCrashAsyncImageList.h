@@ -26,11 +26,29 @@
  * OTHER DEALINGS IN THE SOFTWARE.
  */
 
+#ifndef PLCRASH_ASYNC_IMAGE_LIST_H
+#define PLCRASH_ASYNC_IMAGE_LIST_H
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <stdint.h>
 #include <libkern/OSAtomic.h>
 #include <stdbool.h>
 
 #include "PLCrashAsyncMachOImage.h"
+
+/*
+ * NOTE: We keep this code C-compatible for backwards-compatibility purposes. If the entirity
+ * of the codebase migrates to C/C++/Objective-C++, we can drop the C compatibility support
+ * used here.
+ */
+#ifdef __cplusplus
+#include "PLCrashAsyncLinkedList.hpp"
+#endif
+    
+typedef struct plcrash_async_image plcrash_async_image_t;
 
 /**
  * @internal
@@ -38,16 +56,17 @@
  *
  * Async-safe binary image list element.
  */
-typedef struct plcrash_async_image {
+struct plcrash_async_image {
     /** The binary image. */
     plcrash_async_macho_t macho_image;
 
-    /** The previous image in the list, or NULL */
-    struct plcrash_async_image *prev;
-    
-    /** The next image in the list, or NULL. */
-    struct plcrash_async_image *next;
-} plcrash_async_image_t;
+    /** A borrowed, circular reference to the backing list node. */
+#ifdef __cplusplus
+    plcrash::async::async_list<plcrash_async_image_t *>::node *_node;
+#else
+    void *_node;
+#endif
+};
 
 /**
  * @internal
@@ -56,33 +75,30 @@ typedef struct plcrash_async_image {
  * Async-safe binary image list. May be used to iterate over the binary images currently
  * available in-process.
  */
-typedef struct plcrash_async_image_list {
-    /** The lock used by writers. No lock is required for readers. */
-    OSSpinLock write_lock;
-    
+typedef struct plcrash_async_image_list {    
     /** The Mach task in which all Mach-O images can be found */
     mach_port_t task;
 
-    /** The head of the list, or NULL if the list is empty. Must only be used to iterate or delete entries. */
-    plcrash_async_image_t *head;
-
-    /** The tail of the list, or NULL if the list is empty. Must only be used to append new entries. */
-    plcrash_async_image_t *tail;
-
-    /** The list reference count. No nodes will be deallocated while the count is greater than 0. If the count
-     * reaches 0, all nodes in the free list will be deallocated. */
-    int32_t refcount;
-
-    /** The node free list. */
-    plcrash_async_image_t *free;
+    /** The backing list */
+#ifdef __cplusplus
+    plcrash::async::async_list<plcrash_async_image_t *> *_list;
+#else
+    void *_list;
+#endif
 } plcrash_async_image_list_t;
 
 void plcrash_nasync_image_list_init (plcrash_async_image_list_t *list, mach_port_t task);
 void plcrash_nasync_image_list_free (plcrash_async_image_list_t *list);
-void plcrash_nasync_image_list_append (plcrash_async_image_list_t *list, pl_vm_address_t header, int64_t vmaddr_slide, const char *name);
+void plcrash_nasync_image_list_append (plcrash_async_image_list_t *list, pl_vm_address_t header, const char *name);
 void plcrash_nasync_image_list_remove (plcrash_async_image_list_t *list, pl_vm_address_t header);
 
 void plcrash_async_image_list_set_reading (plcrash_async_image_list_t *list, bool enable);
 
 plcrash_async_image_t *plcrash_async_image_containing_address (plcrash_async_image_list_t *list, pl_vm_address_t address);
 plcrash_async_image_t *plcrash_async_image_list_next (plcrash_async_image_list_t *list, plcrash_async_image_t *current);
+    
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* PLCRASH_ASYNC_IMAGE_LIST_H */

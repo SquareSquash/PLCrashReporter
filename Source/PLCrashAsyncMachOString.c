@@ -28,6 +28,11 @@
 
 #include "PLCrashAsyncMachoString.h"
 
+/**
+ * @internal
+ * @ingroup plcrash_async_image
+ * @{
+ */
 
 /**
  * Initialize a string object from a NUL-terminated C string.
@@ -56,21 +61,30 @@ static plcrash_error_t plcrash_async_macho_string_read (plcrash_async_macho_stri
     
     pl_vm_address_t cursor = string->address;
 
-    /* Map in the page containing the string, +1 up to one additional page. */
+    /* Map in the page containing the string, +1 up to one additional page. Short reads are permitted, as the next page
+     * may not be readable. */
     size_t page_count = 1;
-    plcrash_error_t err = plcrash_async_mobject_init(&string->mobj, string->image->task, string->address, PAGE_SIZE);
+    plcrash_error_t err = plcrash_async_mobject_init(&string->mobj, string->image->task, string->address, PAGE_SIZE, false);
+    if (err != PLCRASH_ESUCCESS)
+        return err;
 
     char c;
     do {
-        char *p = plcrash_async_mobject_remap_address(&string->mobj, cursor, 1);
+        char *p = plcrash_async_mobject_remap_address(&string->mobj, cursor, 0, 1);
         if (p == NULL) {
             /* This should pretty much never happen */
             PLCF_DEBUG("Mapped a string larger than one page! Remapping ...");
             page_count++;
             plcrash_async_mobject_free(&string->mobj);
-            err = plcrash_async_mobject_init(&string->mobj, string->image->task, string->address, page_count*PAGE_SIZE);
+            err = plcrash_async_mobject_init(&string->mobj, string->image->task, string->address, page_count*PAGE_SIZE, false);
             if (err != PLCRASH_ESUCCESS)
                 return err;
+            
+            p = plcrash_async_mobject_remap_address(&string->mobj, cursor, 0, 1);
+            if (p == NULL) {
+                PLCF_DEBUG("Failed to remap additional space ...");
+                return PLCRASH_EINVAL;
+            }
         }
 
         c = *p;
@@ -107,7 +121,7 @@ plcrash_error_t plcrash_async_macho_string_get_length (plcrash_async_macho_strin
 plcrash_error_t plcrash_async_macho_string_get_pointer (plcrash_async_macho_string_t *string, const char **outPointer) {
     plcrash_error_t err = plcrash_async_macho_string_read(string);
     if (err == PLCRASH_ESUCCESS) {
-        *outPointer = plcrash_async_mobject_remap_address(&string->mobj, string->mobj.task_address, string->mobj.length);
+        *outPointer = plcrash_async_mobject_remap_address(&string->mobj, string->mobj.task_address, 0, string->mobj.length);
         if (*outPointer == NULL)
             err = PLCRASH_EACCESS;
     }
@@ -123,3 +137,7 @@ void plcrash_async_macho_string_free (plcrash_async_macho_string_t *string) {
     if (string->mobjIsInitialized)
         plcrash_async_mobject_free(&string->mobj);
 }
+
+/**
+ * @}
+ */

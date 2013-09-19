@@ -62,18 +62,16 @@
     uint32_t count = _dyld_image_count();
     STAssertTrue(count >= 5, @"We need at least five Mach-O images for this test. This should not be a problem on a modern system.");
     
-    plcrash_nasync_image_list_append(&_list, (pl_vm_address_t) _dyld_get_image_header(0), _dyld_get_image_vmaddr_slide(0), _dyld_get_image_name(0));
-
-    STAssertNotNULL(_list.head, @"List HEAD should be set to our new image entry");
-    STAssertEquals(_list.head, _list.tail, @"The list head and tail should be equal for the first entry");
-    
-    plcrash_nasync_image_list_append(&_list, (pl_vm_address_t) _dyld_get_image_header(1), _dyld_get_image_vmaddr_slide(1), _dyld_get_image_name(1));
-    plcrash_nasync_image_list_append(&_list, (pl_vm_address_t) _dyld_get_image_header(2), _dyld_get_image_vmaddr_slide(2), _dyld_get_image_name(2));
-    plcrash_nasync_image_list_append(&_list, (pl_vm_address_t) _dyld_get_image_header(3), _dyld_get_image_vmaddr_slide(3), _dyld_get_image_name(3));
-    plcrash_nasync_image_list_append(&_list, (pl_vm_address_t) _dyld_get_image_header(4), _dyld_get_image_vmaddr_slide(4), _dyld_get_image_name(4));
+    plcrash_nasync_image_list_append(&_list, (pl_vm_address_t) _dyld_get_image_header(0), _dyld_get_image_name(0));
+    plcrash_nasync_image_list_append(&_list, (pl_vm_address_t) _dyld_get_image_header(1), _dyld_get_image_name(1));
+    plcrash_nasync_image_list_append(&_list, (pl_vm_address_t) _dyld_get_image_header(2), _dyld_get_image_name(2));
+    plcrash_nasync_image_list_append(&_list, (pl_vm_address_t) _dyld_get_image_header(3), _dyld_get_image_name(3));
+    plcrash_nasync_image_list_append(&_list, (pl_vm_address_t) _dyld_get_image_header(4), _dyld_get_image_name(4));
     
     /* Verify the appended elements */
     plcrash_async_image_t *item = NULL;
+    
+    plcrash_async_image_list_set_reading(&_list, true);
     for (uintptr_t i = 0; i <= 5; i++) {
         /* Fetch the next item */
         item = plcrash_async_image_list_next(&_list, item);
@@ -86,19 +84,22 @@
 
         /* Validate its value */
         STAssertEquals((pl_vm_address_t) _dyld_get_image_header(i), item->macho_image.header_addr, @"Incorrect header value");
-        STAssertEquals((int64_t)_dyld_get_image_vmaddr_slide(i), item->macho_image.vmaddr_slide, @"Incorrect slide value");
+        STAssertEquals((pl_vm_off_t)_dyld_get_image_vmaddr_slide(i), item->macho_image.vmaddr_slide, @"Incorrect slide value");
         STAssertEqualCStrings(_dyld_get_image_name(i), item->macho_image.name, @"Incorrect name value");
     }
+    plcrash_async_image_list_set_reading(&_list, false);
+
 }
 
 
 /* Test removing the last image in the list. */
 - (void) testRemoveLastImage {
-    plcrash_nasync_image_list_append(&_list, 0x0, 0x10, "image_name");
+    plcrash_nasync_image_list_append(&_list, 0x0, "image_name");
     plcrash_nasync_image_list_remove(&_list, 0x0);
 
-    STAssertNULL(_list.head, @"List HEAD should now be NULL");
-    STAssertNULL(_list.tail, @"List TAIL should now be NULL");
+    plcrash_async_image_list_set_reading(&_list, true);
+    STAssertNULL(plcrash_async_image_list_next(&_list, NULL), @"List should be empty");
+    plcrash_async_image_list_set_reading(&_list, false);
 }
 
 - (void) testRemoveImage {
@@ -106,11 +107,11 @@
     uint32_t count = _dyld_image_count();
     STAssertTrue(count >= 5, @"We need at least five Mach-O images for this test. This should not be a problem on a modern system.");
 
-    plcrash_nasync_image_list_append(&_list, (pl_vm_address_t) _dyld_get_image_header(0), _dyld_get_image_vmaddr_slide(0), _dyld_get_image_name(0));
-    plcrash_nasync_image_list_append(&_list, (pl_vm_address_t) _dyld_get_image_header(1), _dyld_get_image_vmaddr_slide(1), _dyld_get_image_name(1));
-    plcrash_nasync_image_list_append(&_list, (pl_vm_address_t) _dyld_get_image_header(2), _dyld_get_image_vmaddr_slide(2), _dyld_get_image_name(2));
-    plcrash_nasync_image_list_append(&_list, (pl_vm_address_t) _dyld_get_image_header(3), _dyld_get_image_vmaddr_slide(3), _dyld_get_image_name(3));
-    plcrash_nasync_image_list_append(&_list, (pl_vm_address_t) _dyld_get_image_header(4), _dyld_get_image_vmaddr_slide(4), _dyld_get_image_name(4));
+    plcrash_nasync_image_list_append(&_list, (pl_vm_address_t) _dyld_get_image_header(0), _dyld_get_image_name(0));
+    plcrash_nasync_image_list_append(&_list, (pl_vm_address_t) _dyld_get_image_header(1), _dyld_get_image_name(1));
+    plcrash_nasync_image_list_append(&_list, (pl_vm_address_t) _dyld_get_image_header(2), _dyld_get_image_name(2));
+    plcrash_nasync_image_list_append(&_list, (pl_vm_address_t) _dyld_get_image_header(3), _dyld_get_image_name(3));
+    plcrash_nasync_image_list_append(&_list, (pl_vm_address_t) _dyld_get_image_header(4), _dyld_get_image_name(4));
 
     /* Try a non-existent item */
     plcrash_nasync_image_list_remove(&_list, 0x42);
@@ -121,6 +122,7 @@
 
     /* Verify the contents of the list */
     plcrash_async_image_t *item = NULL;
+    plcrash_async_image_list_set_reading(&_list, true);
     int val = 0x0;
     for (int i = 0; i <= 3; i++) {
         /* Fetch the next item */
@@ -134,10 +136,11 @@
         
         /* Validate its value */
         STAssertEquals((pl_vm_address_t) _dyld_get_image_header(val), item->macho_image.header_addr, @"Incorrect header value for %d", val);
-        STAssertEquals((int64_t)_dyld_get_image_vmaddr_slide(val), item->macho_image.vmaddr_slide, @"Incorrect slide value for %d", val);
+        STAssertEquals((pl_vm_off_t)_dyld_get_image_vmaddr_slide(val), item->macho_image.vmaddr_slide, @"Incorrect slide value for %d", val);
         STAssertEqualCStrings(_dyld_get_image_name(val), item->macho_image.name, @"Incorrect name value for %d", val);
         val += 0x2;
     }
+    plcrash_async_image_list_set_reading(&_list, false);
 }
 
 - (void) testFindImageForAddress {    
@@ -147,7 +150,7 @@
     STAssertTrue(dladdr((void *)localIMP, &dli) != 0, @"Failed to look up symbol");
     
     /* Look up the vmaddr slide for our image */
-    int64_t vmaddr_slide = 0;
+    pl_vm_off_t vmaddr_slide = 0;
     bool found_image = false;
     for (uint32_t i = 0; i < _dyld_image_count(); i++) {
         if (_dyld_get_image_header(i) == dli.dli_fbase) {
@@ -159,22 +162,25 @@
     STAssertTrue(found_image, @"Could not find dyld image record");
 
     /* Initialize our image list using our discovered image */
-    plcrash_nasync_image_list_append(&_list, (pl_vm_address_t) dli.dli_fbase, vmaddr_slide, dli.dli_fname);
+    plcrash_nasync_image_list_append(&_list, (pl_vm_address_t) dli.dli_fbase, dli.dli_fname);
 
-    /* Verify that image_base-1 returns NULL */
-    STAssertNULL(plcrash_async_image_containing_address(&_list, (pl_vm_address_t) dli.dli_fbase-1), @"Should not return an image for invalid address");
+    plcrash_async_image_list_set_reading(&_list, true); {
+        /* Verify that image_base-1 returns NULL */
+        STAssertNULL(plcrash_async_image_containing_address(&_list, (pl_vm_address_t) dli.dli_fbase-1), @"Should not return an image for invalid address");
 
-    /* Verify that image_base returns a valid value */
-    plcrash_async_image_t *image;
-    image = plcrash_async_image_containing_address(&_list, (pl_vm_address_t) dli.dli_fbase);
-    STAssertNotNULL(image, @"Failed to return valid image");
-    STAssertEquals(image->macho_image.header_addr, (pl_vm_address_t)dli.dli_fbase, @"Incorrect Mach-O header address");
-    
-    /* Verify that image_base+image_length-1 returns a valid value */
-    STAssertNotNULL(plcrash_async_image_containing_address(&_list, (pl_vm_address_t) dli.dli_fbase+image->macho_image.text_size-1), @"Should not return an image for invalid address");
+        /* Verify that image_base returns a valid value */
+        plcrash_async_image_t *image;
+        image = plcrash_async_image_containing_address(&_list, (pl_vm_address_t) dli.dli_fbase);
+        STAssertNotNULL(image, @"Failed to return valid image");
+        STAssertEquals(image->macho_image.header_addr, (pl_vm_address_t)dli.dli_fbase, @"Incorrect Mach-O header address");
+        STAssertEquals(image->macho_image.vmaddr_slide, vmaddr_slide, @"Incorrect slide value");
 
-    /* Verify that image_base+image_length returns NULL */
-    STAssertNULL(plcrash_async_image_containing_address(&_list, (pl_vm_address_t) dli.dli_fbase+image->macho_image.text_size), @"Should not return an image for invalid address");
+        /* Verify that image_base+image_length-1 returns a valid value */
+        STAssertNotNULL(plcrash_async_image_containing_address(&_list, (pl_vm_address_t) dli.dli_fbase+image->macho_image.text_size-1), @"Should not return an image for invalid address");
+
+        /* Verify that image_base+image_length returns NULL */
+        STAssertNULL(plcrash_async_image_containing_address(&_list, (pl_vm_address_t) dli.dli_fbase+image->macho_image.text_size), @"Should not return an image for invalid address");
+    } plcrash_async_image_list_set_reading(&_list, false);
 
 }
 

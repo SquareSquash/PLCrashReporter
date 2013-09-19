@@ -26,8 +26,12 @@
  * OTHER DEALINGS IN THE SOFTWARE.
  */
 
-#ifndef PLCrashAsyncMObject_h
-#define PLCrashAsyncMObject_h
+#ifndef PLCRASH_ASYNC_MOBJECT_H
+#define PLCRASH_ASYNC_MOBJECT_H
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #include <stdint.h>
 #include "PLCrashAsync.h"
@@ -39,6 +43,9 @@
  * An async-accessible memory mapped object.
  */
 typedef struct plcrash_async_mobject {
+    /** The task from which the memory was mapped */
+    task_t task;
+
     /** The in-memory address at which the target address has been mapped. This address is offset
      * from the actual starting address, to account for the rounding of mappings to whole pages. */
     uintptr_t address;
@@ -57,13 +64,33 @@ typedef struct plcrash_async_mobject {
     /** The actual mapping start address. This may differ from the address pointer, as it must be
      * page-aligned. */
     pl_vm_address_t vm_address;
+    
+    /** The actual mapping size. This may differ from the user-requested size, as the base address has been page-aligned */
+    pl_vm_size_t vm_length;
 } plcrash_async_mobject_t;
 
-plcrash_error_t plcrash_async_mobject_init (plcrash_async_mobject_t *mobj, mach_port_t task, pl_vm_address_t task_addr, pl_vm_size_t length);
+plcrash_error_t plcrash_async_mobject_init (plcrash_async_mobject_t *mobj, mach_port_t task, pl_vm_address_t task_addr, pl_vm_size_t length, bool require_full);
 
-bool plcrash_async_mobject_verify_local_pointer (plcrash_async_mobject_t *mobj, uintptr_t address, size_t length);
-void *plcrash_async_mobject_remap_address (plcrash_async_mobject_t *mobj, pl_vm_address_t address, size_t length);
+pl_vm_address_t plcrash_async_mobject_base_address (plcrash_async_mobject_t *mobj);
+pl_vm_address_t plcrash_async_mobject_length (plcrash_async_mobject_t *mobj);
+
+task_t plcrash_async_mobject_task (plcrash_async_mobject_t *mobj);
+
+bool plcrash_async_mobject_verify_local_pointer (plcrash_async_mobject_t *mobj, uintptr_t address, pl_vm_off_t offset, size_t length);
+void *plcrash_async_mobject_remap_address (plcrash_async_mobject_t *mobj, pl_vm_address_t address, pl_vm_off_t offset, size_t length);
+
+plcrash_error_t plcrash_async_mobject_read_uint8 (plcrash_async_mobject_t *mobj, pl_vm_address_t address, pl_vm_off_t offset, uint8_t *result);
+plcrash_error_t plcrash_async_mobject_read_uint16 (plcrash_async_mobject_t *mobj, const plcrash_async_byteorder_t *byteorder,
+                                                   pl_vm_address_t address, pl_vm_off_t offset, uint16_t *result);
+plcrash_error_t plcrash_async_mobject_read_uint32 (plcrash_async_mobject_t *mobj, const plcrash_async_byteorder_t *byteorder,
+                                                   pl_vm_address_t address, pl_vm_off_t offset, uint32_t *result);
+plcrash_error_t plcrash_async_mobject_read_uint64 (plcrash_async_mobject_t *mobj, const plcrash_async_byteorder_t *byteorder,
+                                                   pl_vm_address_t address, pl_vm_off_t offset, uint64_t *result);
 
 void plcrash_async_mobject_free (plcrash_async_mobject_t *mobj);
+    
+#ifdef __cplusplus
+}
+#endif
 
-#endif // PLCrashAsyncMObject_h
+#endif /* PLCRASH_ASYNC_MOBJECT_H */
