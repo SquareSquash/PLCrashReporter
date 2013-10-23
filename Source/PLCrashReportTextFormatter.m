@@ -33,17 +33,6 @@
 
 #import "PLCrashReportTextFormatter.h"
 
-/*
- * XXX: The ARM_V7S Mach-O CPU subtype is not defined in the Mac OS X 10.8
- * headers.
- */
-#ifndef CPU_SUBTYPE_ARM_V7S
-# define CPU_SUBTYPE_ARM_V7S 11
-#elif !TARGET_OS_IPHONE
-# error CPU_SUBTYPE_ARM_V7S is now defined by the SDK. Please remove this define.
-#endif
-
-
 @interface PLCrashReportTextFormatter (PrivateAPI)
 NSInteger binaryImageSort(id binary1, id binary2, void *context);
 + (NSString *) formatStackFrame: (PLCrashReportStackFrameInfo *) frameInfo
